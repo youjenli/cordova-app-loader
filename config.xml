@@ -8,5 +8,8 @@
         Mark Marijnissen
     </author>
     <content src="index.html"/>
-    <access origin="*" />
+    <access origin="*"/>
+	<access origin="cdvfile://*" />
+	<allow-intent href="*" />
+	<allow-navigation href="*" />
 </widget>

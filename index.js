@@ -2,8 +2,11 @@ var CordovaFileCache = require('cordova-file-cache');
 var CordovaPromiseFS = require('cordova-promise-fs');
 var Promise = null;
 
+//移除 windows.location.href 路徑中的 hash 部分
 var BUNDLE_ROOT = location.href.replace(location.hash,'');
 BUNDLE_ROOT = BUNDLE_ROOT.substr(0,BUNDLE_ROOT.lastIndexOf('/')+1);
+// pathname 就是 url host 以後的子路徑
+//若是 cordova 環境是 iphone, 就從 /www/ 開始抽取 bundle root
 if(/ip(hone|ad|od)/i.test(navigator.userAgent)){
   BUNDLE_ROOT = location.pathname.substr(location.pathname.indexOf('/www/'));
   BUNDLE_ROOT = BUNDLE_ROOT.substr(0,BUNDLE_ROOT.lastIndexOf('/')+1);
@@ -22,14 +25,20 @@ function hash(files){
 }
 
 function AppLoader(options){
-  if(!options) throw new Error('CordovaAppLoader has no options!');
-  if(!options.fs) throw new Error('CordovaAppLoader has no "fs" option (cordova-promise-fs)');
-  if(!options.serverRoot) throw new Error('CordovaAppLoader has no "serverRoot" option.');
+  if(!options) {
+	throw new Error('CordovaAppLoader has no options!');  
+  }
+  if(!options.fs) {
+	throw new Error('CordovaAppLoader has no "fs" option (cordova-promise-fs)');  
+  }
+  if(!options.serverRoot) {
+	throw new Error('CordovaAppLoader has no "serverRoot" option.');  
+  }
   if(!window.pegasus || !window.Manifest) throw new Error('CordovaAppLoader bootstrap.js is missing.');
-  this.allowServerRootFromManifest = options.allowServerRootFromManifest === true;
+  this.allowServerRootFromManifest = options.allowServerRootFromManifest === true;//??
   Promise = options.fs.Promise;
 
-  // initialize variables
+  // initialize variables ??
   this.manifest = window.Manifest;
   this.newManifest = null;
   this.bundledManifest = null;
@@ -44,12 +53,13 @@ function AppLoader(options){
   if(options.mode) options.mode = 'mirror';
   this.cache = new CordovaFileCache(options);
 
-  // private stuff
+  // private stuff ??
   this.corruptNewManifest = false;
   this._toBeCopied = [];
   this._toBeDeleted = [];
   this._toBeDownloaded = [];
   this._updateReady = false;
+  //讀取應用程式內容列表之時間限制
   this._checkTimeout = options.checkTimeout || 10000;
 }
 
@@ -63,11 +73,13 @@ AppLoader.prototype._createFilemap = function(files){
   return result;
 };
 
+//下載遠端應用程式包裡的特定檔案到本地的檔案系統
 AppLoader.prototype.copyFromBundle = function(file){
   var url = BUNDLE_ROOT + file;
   return this.cache._fs.download(url,this.cache.localRoot + file);
 };
 
+//取得本地網頁上應用程式包的內容列表
 AppLoader.prototype.getBundledManifest = function(){
   var self = this;
   var bootstrapScript = document.querySelector('script[manifest]');
@@ -86,14 +98,15 @@ AppLoader.prototype.getBundledManifest = function(){
   });
 };
 
-
 AppLoader.prototype.check = function(newManifest){
-  var self = this, manifest = this.manifest;
+  var self = this,
+	  manifest = this.manifest;
   if(typeof newManifest === "string") {
     self.newManifestUrl = newManifest;
     newManifest = undefined;
   }
 
+  //要是有提供新版的應用程式內容清單路徑, 就去取得新版的應用程式內容清單
   var gotNewManifest = new Promise(function(resolve,reject){
     if(typeof newManifest === "object") {
       resolve(newManifest);
@@ -104,6 +117,7 @@ AppLoader.prototype.check = function(newManifest){
   });
 
   return new Promise(function(resolve,reject){
+	//在取得本地與新的應用程式內容清單, 以及本地程式檔案列表之後....
     Promise.all([gotNewManifest,self.getBundledManifest(),self.cache.list()])
       .then(function(values){
         var newManifest = values[0];
@@ -132,15 +146,15 @@ AppLoader.prototype.check = function(newManifest){
 
         // Check if new manifest is valid
         if(!newManifest.files){
-          reject('Downloaded Manifest has no "files" attribute.');
+          reject('Downloaded Manifest does not have "files" attribute.');
           return;
         }
 
         // We're good to go check! Get all the files we need
-        var cachedFiles = values[2]; // files in cache
-        var oldFiles = self._createFilemap(manifest.files); // files in current manifest
-        var newFiles = self._createFilemap(newManifest.files); // files in new manifest
-        var bundledFiles = self._createFilemap(bundledManifest.files); // files in app bundle
+        var cachedFiles = values[2]; //Application files which were already saved in local cache.
+        var oldFiles = self._createFilemap(manifest.files); // Application files listed in current manifest. ??
+        var newFiles = self._createFilemap(newManifest.files); // Application files listed in new manifest.
+        var bundledFiles = self._createFilemap(bundledManifest.files); // Application files listed in app bundle.
 
         // Create COPY and DOWNLOAD lists
         self._toBeDownloaded = [];
@@ -148,44 +162,45 @@ AppLoader.prototype.check = function(newManifest){
         self._toBeDeleted= [];
         var isCordova = self.cache._fs.isCordova;
         Object.keys(newFiles)
-          // Find files that have changed version or are missing
+          //Pick up those application files which should download from remote server, ...
           .filter(function(file){
-                    // if new file, or...
+                    // if the file was not available in previous version....
             return !oldFiles[file] ||
-                    // version has changed, or...
+                    // or the version of the file has changed...
                     oldFiles[file].version !== newFiles[file].version ||
-                    // not in cache for some reason
+                    // or it was not in cache for some reason...
                     !self.cache.isCached(file);
           })
-          // Add them to the correct list
+          // then we add these files to the correct list
           .forEach(function(file){
-            // bundled version matches new version, so we can copy!
+            // if the version of bundled application file matches version of new application file, then we can copy it!
             if(isCordova && bundledFiles[file] && bundledFiles[file].version === newFiles[file].version){
               self._toBeCopied.push(file);
-            // othwerwise, we must download
+            // Othwerwise, we download it from remote server.
             } else {
               self._toBeDownloaded.push(file);
             }
           });
 
-        // Delete files
+		// Delete files
         self._toBeDeleted = cachedFiles
           .map(function(file){
             return file.substr(self.cache.localRoot.length);
           })
           .filter(function(file){
-                  // Everything that is not in new manifest, or....
+                  // Everything that is not in new manifest... which means these files does not exist in new version...NOT SURE
             return !newFiles[file] ||
-                  // Files that will be downloaded, or...
+                  // Files that will be downloaded from remote server, which means a new version of these files was released... NOT SURE
                    self._toBeDownloaded.indexOf(file) >= 0 ||
-                  // Files that will be copied
+                  // Files that will be copied from bundled application
                    self._toBeCopied.indexOf(file) >= 0;
           });
 
-
+		// Do calculation to find out how many files have to be modified in the new version.
+		// If we don't have to download any file from remote or delete any file in local bundle, 
+	    // which means this app does not have new release, then we can keep serving from local bundle!
         var changes = self._toBeDeleted.length + self._toBeDownloaded.length;
-        // Note: if we only need to copy files, we can keep serving from bundle!
-        // So no update is needed!
+        
         if(changes > 0){
           // Save the new Manifest
           self.newManifest = newManifest;
@@ -246,7 +261,6 @@ AppLoader.prototype.download = function(onprogress){
 
 AppLoader.prototype.update = function(reload){
   if(this._updateReady) {
-    // update manifest
     localStorage.setItem('manifest',JSON.stringify(this.newManifest));
     if(reload !== false) location.reload();
     return true;
@@ -254,12 +268,14 @@ AppLoader.prototype.update = function(reload){
   return false;
 };
 
+//清除本地的更新紀錄與應用程式內容清單
 AppLoader.prototype.clear = function(){
   localStorage.removeItem('last_update_files');
   localStorage.removeItem('manifest');
   return this.cache.clear();
 };
 
+//重新載入網頁
 AppLoader.prototype.reset = function(){
   return this.clear().then(function(){
     location.reload();
